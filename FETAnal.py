@@ -1,24 +1,18 @@
 #!/usr/bin/env python3
 # encoding: UTF-8
+# dependencies: numpy >= 1.12, matplotlib >= 2.2, xlrd >= 1.0
+
 import os
 import time
-import numpy
-import win32com.client
-from matplotlib.pyplot import *
 import warnings
-import atexit
+import numpy
+from matplotlib.pyplot import *
+import xlrd
 
 # preparatory work
-os.system('title FET Analyzer v1.02 by Z. Sun')
+os.system('title FET Analyzer v1.04 by Z. Sun')
 warnings.simplefilter('ignore', np.RankWarning) # turn off polyfit warnings
-def pause(): # cleanse well
-    global xlsApp
-    try: xlsApp.Application.Quit(); del xlsApp
-    except: print('\nFailed to turn off Microsoft Excel, please do it manually.')
-    print()
-    os.system('pause') # to pause before crushing
-
-atexit.register(pause)
+warnings.simplefilter('ignore', UserWarning) # turn off matplotlib/font-not-found warnings
 thisDir = os.path.abspath(os.path.dirname(sys.argv[0])) # where this script locates
 
 try: f = open(os.path.join(thisDir, 'Config.ini')); exec(f.read()); f.close() # definitions
@@ -34,21 +28,19 @@ if DIELECTRIC == 2: # For BCB, serial connection
     cp = cp*cp0/(cp+cp0)
 
 if len(sys.argv) == 1:
-    print('\nEnter "-config" or .xls files or their path here (drag-drop supported): ', end='')
-    os.system('python ' + sys.argv[0] + ' ' + input())
+    print('\nEnter `-config\' or .xls files array or their path here (drag-drop supported): ', end='')
+    cmdline = '"' + sys.argv[0] + '" ' + input()
+    if '.py' in sys.argv[0]: cmdline = 'python ' + cmdline # if $0 is a .py script rather than an executable file
+    else: cmdline = 'cmd /c "' + cmdline + '"' # I really hate to employ such a circuitous way, but `os.system' has an annoying bug when handling commands with space sign and multiple quoted arguments
+    # please refer to https://bugs.python.org/issue1524 (a ten-year-old issue yet not resolved)
+    os.system(cmdline)
     os._exit(0)
 if sys.argv[1].lower() == "-config":
     os.chdir(thisDir)
     os.system('start config.ini'); os._exit(0)
 
 print('\nPlease check the following parameters:\nCapacitance [F/cm^2]\tW/L [μm]\tCol # of V_gs/√I_d')
-print(end="\t")
-print(cp, end="\t\t")
-print("%d/%d\t\t%d/%d" % (W, L, ColGateV, ColIDrain))
-    
-xlsApp = win32com.client.DispatchEx('Excel.Application')
-xlsApp.EnableEvents = False
-xlsApp.DisplayAlerts = False
+print("\t%.2E\t%d/%d\t\t%d/%d" % (cp, W, L, ColGateV, ColIDrain))
 
 if os.path.isdir(sys.argv[1]): # judge whether the input is path or files array
     path = sys.argv[1]
@@ -75,8 +67,8 @@ def savitzky_golay(y): # Smooth data with a Savitzky-Golay filter (in fact incor
     b = numpy.mat([[k**i for i in order_range] for k in range(-half, half+1)])
     m = numpy.linalg.pinv(b).A[0]
     # pad the signal at the extremes with values taken from the signal itself
-    firstvals = y[0] - numpy.abs(y[1:half+1][::-1] - y[0] )
-    lastvals = y[-1] + numpy.abs(y[-half-1:-1][::-1] - y[-1])
+    firstvals = y[0] - numpy.abs([x - y[0] for x in y[1:half+1][::-1]])
+    lastvals = y[-1] + numpy.abs([x - y[-1] for x in y[-half-1:-1][::-1]])
     y = numpy.concatenate((firstvals, y, lastvals))
     return numpy.convolve(m[::-1], y, mode='valid')
 
@@ -94,15 +86,15 @@ def plot_sp():
     ax1.grid(True, linestyle='dashed')
     
     for i in [0, 1]:
-        ax1.plot(results[pic][1][i], results[pic][3][i]*1e3, label=['Forward', 'Backward'][i]) # smoothed tranfer curve
-        ax1.plot(results[pic][1][i], results[pic][2][i]*1e3, color='C%d' % i, alpha=.6, marker='s', markersize=4, linewidth=0) # original transfer curve
-        ax2.plot(results[pic][1][i][half:-half], results[pic][4][i][0]**2*2*L/W/cp, color='C%d' % i, alpha=.6, marker='+', linewidth=0) # plot mobility against Vgs
+        ax1.plot(results[pic][1][i], [x*1e3 for x in results[pic][3][i]], color='C%d' % (3*i), label=['Forward', 'Backward'][i]) # smoothed tranfer curve; color: 0,3=blue,red
+        ax1.plot(results[pic][1][i], [x*1e3 for x in results[pic][2][i]], color='C%d' % (3*i), alpha=.6, marker='s', markersize=4, linewidth=0) # original transfer curve
+        ax2.plot(results[pic][1][i][half:-half], results[pic][4][i][0]**2*2*L/W/cp, color='C%d' % (3*i), alpha=.6, marker='+', linewidth=0) # plot mobility against Vgs
     
     ymax = ax1.get_ylim()[1]
     for i in [0, 1]: # result of linear fitting
         sl = 1/results[pic][5][i][0]
         intc = -results[pic][5][i][1]/results[pic][5][i][0]
-        ax1.plot([intc, sl*ymax/1e3+intc], [0, ymax], linestyle='dashed', alpha=.6)
+        ax1.plot([intc, sl*ymax/1e3+intc], [0, ymax], linestyle='dashed', color='C%d' % (3*i), alpha=.6)
         if i == 0: ax1.set_xlim(min(min(results[pic][1][0]), intc), max(max(results[pic][1][0]), intc))
     ax1.set_ylim(0, ymax)
     ymax = ax2.get_ylim()[1]
@@ -141,29 +133,40 @@ pic = -1 # index of figure
 
 for i in files:
     fn = os.path.splitext(os.path.basename(i))
-    if fn[1]!=".xls": continue
+    if fn[1][:4]!=".xls": continue
     print('%02d'%(pic+2), end=' ')
     print(fn[0]+' '*(25-len(fn[0])) if len(fn[0]) < 25 else fn[0][:22]+'...', end='') # when the filename is too long
     fl.write(str(pic+2)+','+fn[0]+',')
     fd.write(fn[0]+',#'+str(pic+2)+'\nV_g[V],')
     if autowl:
         import re
-        try: W, L = map(lambda x: int(x[:-2]), re.findall(r'\d*um', fn[0],flags=re.I))
+        try: W, L = map(int, re.findall(r'\d+(?=[-_\s]*.?m)', fn[0], flags=re.I))
+        # acceptable versions: 100um, 1mm, 50 um, 50-um, 50_um, etc.
         except: print('Bad filename.'); fl.write('\n'); fd.write('\n'); continue
 
     try:
-        wb = xlsApp.Workbooks.Open(os.path.abspath(i))
-        wb.Checkcompatibility = False
-        data = numpy.array(wb.Worksheets('Data').UsedRange.Value[1:]).T
-        wb.Close(SaveChanges=False)
+        wb = xlrd.open_workbook(i, logfile=open(os.devnull, 'w'), on_demand = False)
+        # set logfile to `null' to depress warnings
+        # in fact, `on_demand' is not supported for .xls documents (with BIFF<5.0)
+        sheet = wb.sheet_by_name('Data') # wb.sheet_by_index(0)
+        headers = sheet.row_values(0)
+        _ColGateV, _ColIDrain = ColGateV-1, ColIDrain-1 # start counting from 0
+        if ColGateV == 0:
+            try: _ColGateV = headers.index('GateV')
+            except: print('Bad column header name.'); fl.write('\n'); fd.write('\n'); continue
+        if ColIDrain == 0:
+            try: _ColIDrain = headers.index('IDRAIN')
+            except:
+                try: _ColIDrain = headers.index('IDLIN')
+                except: print('Bad column header name.'); fl.write('\n'); fd.write('\n'); continue
 
-        gatev = numpy.array(data[ColGateV-1], dtype=float)  # dtype must be designated this way to avoid error when polyfitting
+        gatev = sheet.col_values(_ColGateV, start_rowx=1, end_rowx=None)
         nscan = len(gatev)//2 # forward/backward
-        gatev = [gatev[:nscan], numpy.flipud(gatev[nscan:])] # flipping the backward sequence is beneficial
+        gatev = [gatev[:nscan], gatev[:nscan-1:-1]] # flipping the backward sequence is beneficial
         fd.write(','.join(numpy.array(gatev, dtype=str).flatten()))
         fd.write('\n√I_d(smoothed)[A],')
-        idlin = numpy.array(data[ColIDrain-1], dtype=float) # sqrt(Ids)
-        idlin = [idlin[:nscan], numpy.flipud(idlin[nscan:])]
+        idlin = sheet.col_values(_ColIDrain, start_rowx=1, end_rowx=None) # sqrt(Ids)
+        idlin = [idlin[:nscan], idlin[:nscan-1:-1]]
         idsg = [0, 0] # smoothed value of sqrt(Ids)
         diff = [[], []] # consist of [slope, intercept] arrays
         maxs = [[0, 0], [0, 0]] # [slope, intercept] when abs(slope) reaches a maximum
@@ -191,9 +194,10 @@ for i in files:
                 fd.write('N/A,'*half+','.join(numpy.array(diff[k][j], dtype=str))+',N/A'*half+',')
         fd.write('\n\n')
 
-        ionoff = '%.2E' % (idsg[0][-1]/idsg[0][0])**2 # Ion/Ioff
-        print(ionoff) # should always scan Vgs from off to on!
-        fl.write(ionoff+'\n')
+        ionoff = (idsg[0][-1]/idsg[0][0])**2 # Ion/Ioff
+        if ionoff < 1: ionoff = 1/ionoff # if Vgs was scanned from off to on!
+        print('%.2E' % ionoff)
+        fl.write('%.2E\n' % ionoff)
     except Exception as e:
         print(repr(e))
         fl.write(repr(e)+'\n')
@@ -206,7 +210,6 @@ for i in files:
     subplots_adjust(left=.10, right=.91, top=.95, bottom=.12)
     savefig('Results/' + fn[0] + PICEXT)
 
-xlsApp.Application.Quit(); del xlsApp
 print('\nResults (.csv and ' + PICEXT + ' files) were saved at: %s.' % os.path.abspath('Results'))
 fl.close()
 fd.close()
