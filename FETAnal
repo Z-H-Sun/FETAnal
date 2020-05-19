@@ -46,7 +46,7 @@ if len(sys.argv) == 1:
 if sys.argv[1].lower() == "-config":
     os.chdir(thisDir)
     if os.name == 'nt': os.system('start notepad FETAnal.config')
-    else: os.system('vi config.ini')
+    else: os.system('vi FETAnal.config')
     os._exit(0)
 
 print('\nPlease check the following parameters:\nCapacitance [F/cm^2]\tW/L [μm]\tCol # of V_gs/√I_d')
